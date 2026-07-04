@@ -73,19 +73,62 @@
   .instructions ol{margin:0; padding-left:20px;}
   .instructions li{margin-bottom:8px; line-height:1.4; font-size:.94rem;}
 
-  /* camera overlay */
+  /* camera overlay — bisa "small" (pojok, seperti PiP video call) atau "full" (memenuhi layar) */
   #camDock{
     position:fixed; bottom:14px; right:14px; z-index:50;
     width:110px; height:150px; border-radius:16px; overflow:hidden;
     border:3px solid #fff; box-shadow:var(--shadow); background:#000;
+    transition:all .35s cubic-bezier(.4,0,.2,1); cursor:pointer;
+  }
+  #camDock.full{
+    top:0; left:0; right:0; bottom:0; width:100%; height:100%;
+    border-radius:0; border:none; z-index:5; cursor:default;
   }
   #camDock video{width:100%; height:100%; object-fit:cover;}
   #camDock .camLabel{
     position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,.55); color:#fff;
     font-size:.6rem; text-align:center; padding:2px 0;
   }
+  #camDock .camHint{
+    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    background:rgba(0,0,0,.55); color:#fff; font-size:.72rem; padding:6px 14px;
+    border-radius:999px; white-space:nowrap;
+  }
+  #camDock.small .camHint{display:none;}
   .rec-dot{width:8px; height:8px; border-radius:50%; background:#ff4d4d; display:inline-block; margin-right:4px; animation:blink 1.2s infinite;}
   @keyframes blink{50%{opacity:.2}}
+
+  /* kartu mini yang mengambang di atas kamera penuh layar, mirip self-view saat video call */
+  .miniCard{
+    position:fixed; top:16px; right:16px; z-index:20;
+    width:min(78vw,250px); max-height:76vh; overflow:hidden;
+    background:#fff; border-radius:18px; box-shadow:var(--shadow);
+    display:flex; flex-direction:column; animation:pop .3s ease;
+  }
+  .miniCardHeader{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:8px 10px; background:var(--navy); color:#fff; font-size:.72rem; font-weight:700;
+    flex-shrink:0;
+  }
+  .miniSwapBtn{
+    background:rgba(255,255,255,.18); color:#fff; border:none; border-radius:8px;
+    padding:5px 9px; font-size:.68rem; font-weight:700; cursor:pointer; font-family:'Baloo 2',sans-serif;
+  }
+  .miniCardBody{ padding:12px; overflow-y:auto; }
+  .miniCardBody .card{ padding:0; box-shadow:none; border-radius:0; max-width:none; }
+  .miniCardBody h1{ font-size:.85rem; }
+  .miniCardBody h2{ font-size:.8rem; }
+  .miniCardBody h3{ font-size:.75rem; }
+  .miniCardBody p, .miniCardBody li, .miniCardBody label{ font-size:.7rem; }
+  .miniCardBody .qtext{ font-size:.78rem; }
+  .miniCardBody input[type=text]{ padding:8px 10px; font-size:.78rem; }
+  .miniCardBody .btn{ padding:9px 14px; font-size:.78rem; }
+  .miniCardBody .logo-wrap img{ width:120px; }
+  .miniCardBody .pos-hero img{ width:90px; }
+  .miniCardBody .instructions{ padding:10px; }
+  .miniCardBody .instructions li{ font-size:.68rem; margin-bottom:5px; }
+  .miniCardBody .route-map{ display:none; }
+  .miniCardBody .scanBox video{ max-width:100%; }
 
   .pos-hero{position:relative; text-align:center; margin-bottom:10px;}
   .pos-hero img{width:min(60vw,220px);}
@@ -155,8 +198,9 @@
 </head>
 <body>
 <div id="app"></div>
-<div id="camDock" style="display:none;">
+<div id="camDock" class="small" style="display:none;">
   <video id="camVideo" autoplay playsinline muted></video>
+  <div class="camHint">👆 Ketuk untuk perbesar kamera</div>
   <div class="camLabel"><span class="rec-dot"></span>KAMERA AKTIF</div>
 </div>
 
@@ -177,6 +221,9 @@ const START_CODE = "MULAI48"; // kode unik umum untuk memulai permainan (dapat d
 
 function norm(s){
   return (s||"").toLowerCase().normalize('NFKD').replace(/[-–—,.]/g,' ').replace(/\s+/g,' ').trim();
+}
+function normalizeCode(s){
+  return (s||"").toUpperCase().replace(/\s+/g,'').trim();
 }
 function keywordMatch(answer, keywords){
   const a = norm(answer);
@@ -274,8 +321,12 @@ let state = {
   scores:{},       // {posKey: number}
   currentAnswer:'',
   scanning:false,
-  errorMsg:''
+  errorMsg:'',
+  cameraFull:false   // true = kamera memenuhi layar & konten jadi kartu kecil (mirip PiP video call)
 };
+
+/* layar yang mendukung pertukaran tampilan kamera <-> daftar pertanyaan/konten */
+const SWAPPABLE_SCREENS = ['findSymbol','enterCode','question'];
 
 const app = document.getElementById('app');
 
@@ -302,6 +353,48 @@ function attachScanVideo(){
   if(v && state.camStream){ v.srcObject = state.camStream; }
 }
 
+/* Menempatkan kamera & konten di layar: kecil+kecil bergantian penuh layar,
+   mirip perpindahan tampilan saat video call (WhatsApp-style swap). */
+function layoutCameraAndContent(contentNode){
+  const dock = document.getElementById('camDock');
+  const swappable = SWAPPABLE_SCREENS.includes(state.screen) && state.camReady;
+
+  if(!swappable){
+    dock.classList.remove('full');
+    dock.classList.add('small');
+    dock.onclick = null;
+    app.innerHTML=''; app.appendChild(contentNode);
+    return;
+  }
+
+  if(!state.cameraFull){
+    // Normal: konten memenuhi layar, kamera kecil di pojok (ketuk untuk membesarkan)
+    dock.classList.remove('full');
+    dock.classList.add('small');
+    dock.onclick = ()=>{ state.cameraFull = true; render(); };
+    app.innerHTML=''; app.appendChild(contentNode);
+  }else{
+    // Kamera memenuhi layar, konten jadi kartu kecil mengambang (ketuk tombol untuk kembali)
+    dock.classList.remove('small');
+    dock.classList.add('full');
+    dock.onclick = ()=>{ state.cameraFull = false; render(); };
+    app.innerHTML='';
+    const mini = document.createElement('div');
+    mini.className='miniCard';
+    mini.innerHTML = `<div class="miniCardHeader"><span>📋 Konten</span>
+      <button class="miniSwapBtn" id="miniSwapBtn" type="button">⤢ Perbesar konten</button></div>
+      <div class="miniCardBody"></div>`;
+    mini.querySelector('.miniCardBody').appendChild(contentNode);
+    mini.querySelector('#miniSwapBtn').onclick=(e)=>{
+      e.stopPropagation();
+      state.cameraFull = false; render();
+    };
+    // klik di dalam kartu mini tidak boleh membesarkan kamera lagi (biar bisa isi form)
+    mini.addEventListener('click', e=>e.stopPropagation());
+    app.appendChild(mini);
+  }
+}
+
 /* ================= STORAGE (riwayat) =================
    Catatan: window.storage hanya tersedia saat aplikasi ini dijalankan
    di dalam Claude.ai (fitur artifact). Saat di-deploy mandiri (mis. GitHub
@@ -324,7 +417,7 @@ async function saveHistoryRecord(record){
 }
 
 /* ================= RENDER HELPERS ================= */
-function render(){ app.innerHTML=''; app.appendChild(Screens[state.screen]()); attachScanVideo(); }
+function render(){ layoutCameraAndContent(Screens[state.screen]()); attachScanVideo(); }
 function el(html){ const d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstElementChild; }
 function totalScore(){ return Object.values(state.scores).reduce((a,b)=>a+b,0); }
 function starsFor(total){
@@ -415,16 +508,20 @@ Screens.gamecode = function(){
   const wrap = el(`<div class="card center">
     <h2 class="title-font" style="color:var(--navy);">🔑 Kode Unik Permainan</h2>
     <p class="muted">Masukkan kode unik dari pengajar untuk melanjutkan permainan.</p>
-    <input type="text" id="gcode" placeholder="Masukkan kode unik..." style="text-align:center; letter-spacing:2px; font-weight:700;"/>
+    <input type="text" id="gcode" placeholder="Masukkan kode unik..." autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" style="text-align:center; letter-spacing:2px; font-weight:700;"/>
     <p class="error-text" id="gcodeErr" style="display:none;">Kode salah. Coba lagi.</p>
     <button class="btn btn-block mt20" id="okBtn">Konfirmasi</button>
     <p class="hint">Tanyakan kode kepada guru/pemandu jika belum mengetahuinya.</p>
   </div>`);
-  wrap.querySelector('#okBtn').onclick=()=>{
-    const val = wrap.querySelector('#gcode').value.trim().toUpperCase();
-    if(val !== START_CODE){ wrap.querySelector('#gcodeErr').style.display='block'; return; }
+  const input = wrap.querySelector('#gcode');
+  const submit=()=>{
+    const val = normalizeCode(input.value);
+    if(val !== normalizeCode(START_CODE)){ wrap.querySelector('#gcodeErr').style.display='block'; return; }
+    wrap.querySelector('#gcodeErr').style.display='none';
     state.posIndex=0; state.screen='findSymbol'; render();
   };
+  wrap.querySelector('#okBtn').onclick=submit;
+  input.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
   return wrap;
 };
 
@@ -438,11 +535,12 @@ Screens.findSymbol = function(){
     <div class="pos-hero"><img src="${pos.img()}" alt="${pos.name}"/></div>
     <p>Arahkan kamera perangkatmu ke simbol <b>${pos.name}</b> yang ada di lokasi ini.</p>
     <div class="scanBox">
-      <video id="scanVideo" autoplay playsinline muted></video>
+      ${state.cameraFull? `<p class="muted">📷 Kamera sedang tampil penuh di belakang kartu ini.</p>` :
+      `<video id="scanVideo" autoplay playsinline muted></video>`}
       ${state.scanning? `<div class="scan-anim"></div><p class="muted mt8">🔎 Mendeteksi simbol...</p>` :
       `<button class="btn btn-gold btn-block" id="scanBtn">📷 Deteksi Simbol Sekarang</button>`}
     </div>
-    <p class="hint">Pastikan simbol ${pos.name} terlihat jelas pada kamera, lalu tekan tombol deteksi.</p>
+    <p class="hint">Pastikan simbol ${pos.name} terlihat jelas pada kamera, lalu tekan tombol deteksi.<br>💡 Ketuk jendela kamera untuk membesarkannya seperti panggilan video.</p>
   </div>`);
   const btn = wrap.querySelector('#scanBtn');
   if(btn){
@@ -464,17 +562,21 @@ Screens.enterCode = function(){
     <div class="pos-hero" style="margin-bottom:0;"><img src="${pos.img()}" style="width:120px;" alt=""/></div>
     <h2 class="title-font" style="color:var(--navy);">🔒 Kode Unik Memasuki POS ${pos.id}</h2>
     <p class="muted">Simbol ${pos.name} terdeteksi! Masukkan kode unik untuk membuka petunjuk.</p>
-    <input type="text" id="poscode" placeholder="Masukkan kode unik..." style="text-align:center; letter-spacing:2px; font-weight:700;"/>
+    <input type="text" id="poscode" placeholder="Masukkan kode unik..." autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" style="text-align:center; letter-spacing:2px; font-weight:700;"/>
     <p class="error-text" id="poscodeErr" style="display:none;">Kode salah, silakan coba lagi.</p>
     <button class="btn btn-block mt20" id="posOk">Buka Petunjuk</button>
   </div>`);
-  wrap.querySelector('#posOk').onclick=()=>{
-    const val = wrap.querySelector('#poscode').value.trim().toUpperCase();
-    if(val !== pos.code){ wrap.querySelector('#poscodeErr').style.display='block'; return; }
+  const input = wrap.querySelector('#poscode');
+  const submit=()=>{
+    const val = normalizeCode(input.value);
+    if(val !== normalizeCode(pos.code)){ wrap.querySelector('#poscodeErr').style.display='block'; return; }
+    wrap.querySelector('#poscodeErr').style.display='none';
     state.qIndex=0;
     state.answers[pos.key]=[];
     state.screen='question'; render();
   };
+  wrap.querySelector('#posOk').onclick=submit;
+  input.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
   return wrap;
 };
 
@@ -611,21 +713,20 @@ Screens.finalRecap = async function(){
 
   wrap.querySelector('#exitBtn').onclick=()=>{
     state = {screen:'home', camStream:state.camStream, camReady:state.camReady,
-      player1:'', player2:'', posIndex:0, qIndex:0, answers:{}, scores:{}, currentAnswer:'', scanning:false, errorMsg:''};
+      player1:'', player2:'', posIndex:0, qIndex:0, answers:{}, scores:{}, currentAnswer:'', scanning:false, errorMsg:'', cameraFull:false};
     render();
   };
   return wrap;
 };
 
 /* finalRecap is async — wrap renderer to support it */
-const _origRender = render;
 render = function(){
   app.innerHTML = '<div class="card center"><p class="muted">Memuat...</p></div>';
   const result = Screens[state.screen]();
   if(result instanceof Promise){
-    result.then(node=>{ app.innerHTML=''; app.appendChild(node); attachScanVideo(); });
+    result.then(node=>{ layoutCameraAndContent(node); attachScanVideo(); });
   }else{
-    app.innerHTML=''; app.appendChild(result); attachScanVideo();
+    layoutCameraAndContent(result); attachScanVideo();
   }
 };
 
